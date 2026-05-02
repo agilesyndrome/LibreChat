@@ -14,9 +14,12 @@ jest.mock('./config', () => ({
   getOpenAIConfig: (...args: unknown[]) => mockGetOpenAIConfig(...args),
 }));
 
+const mockResolveHeaders = jest.fn(
+  (options?: { headers?: Record<string, string> }) => options?.headers ?? {},
+);
 jest.mock('~/utils', () => ({
   getAzureCredentials: jest.fn(),
-  resolveHeaders: jest.fn(() => ({})),
+  resolveHeaders: (...args: unknown[]) => mockResolveHeaders(...args),
   isUserProvided: (val: string) => val === 'user_provided',
   checkUserKeyExpiry: jest.fn(),
 }));
@@ -131,5 +134,62 @@ describe('initializeOpenAI – SSRF guard wiring', () => {
     }
 
     expect(mockGetOpenAIConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe('initializeOpenAI – runtime header resolution', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should resolve configured OpenAI headers with request user and body', async () => {
+    const resolvedHeaders = {
+      'X-LibreChat-User': 'user-1',
+      'X-Convo': 'conv-123',
+    };
+    mockResolveHeaders.mockReturnValueOnce(resolvedHeaders);
+
+    const params = createParams({
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_REVERSE_PROXY: 'https://openrouter.ai/api/v1',
+    });
+    params.req.body = { key: '2099-01-01', conversationId: 'conv-123' };
+    params.req.config = {
+      endpoints: {
+        [EModelEndpoint.openAI]: {
+          headers: {
+            'X-LibreChat-User': '{{LIBRECHAT_USER_ID}}',
+            'X-Convo': '{{LIBRECHAT_BODY_CONVERSATIONID}}',
+          },
+        },
+      },
+    } as BaseInitializeParams['req']['config'];
+
+    try {
+      await initializeOpenAI(params);
+    } finally {
+      (params as unknown as { _restore: () => void })._restore();
+    }
+
+    expect(mockResolveHeaders).toHaveBeenCalledWith({
+      headers: {
+        'X-LibreChat-User': '{{LIBRECHAT_USER_ID}}',
+        'X-Convo': '{{LIBRECHAT_BODY_CONVERSATIONID}}',
+      },
+      user: params.req.user,
+      body: params.req.body,
+    });
+
+    expect(mockGetOpenAIConfig).toHaveBeenCalledWith(
+      'sk-test',
+      expect.objectContaining({
+        headers: resolvedHeaders,
+        modelOptions: expect.objectContaining({
+          model: 'gpt-4',
+          user: 'user-1',
+        }),
+      }),
+      EModelEndpoint.openAI,
+    );
   });
 });

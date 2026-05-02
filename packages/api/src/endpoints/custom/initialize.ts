@@ -8,7 +8,7 @@ import type { TEndpoint } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
 import type { BaseInitializeParams, InitializeResultBase, EndpointTokenConfig } from '~/types';
 import { getOpenAIConfig } from '~/endpoints/openai/config';
-import { isUserProvided, checkUserKeyExpiry } from '~/utils';
+import { isUserProvided, checkUserKeyExpiry, resolveHeaders } from '~/utils';
 import { getCustomEndpointConfig } from '~/app/config';
 import { fetchModels } from '~/endpoints/models';
 import { validateEndpointURL } from '~/auth';
@@ -165,6 +165,14 @@ export async function initializeCustom({
     proxy: PROXY ?? null,
     ...customOptions,
   };
+
+  if (clientOptions.headers) {
+    clientOptions.headers = resolveHeaders({
+      headers: clientOptions.headers as Record<string, string>,
+      user: req.user,
+      body: req.body,
+    });
+  }
 
   const modelOptions = { ...(model_parameters ?? {}), user: userId };
   const finalClientOptions = {

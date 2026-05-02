@@ -23,9 +23,13 @@ jest.mock('~/cache', () => ({
   tokenConfigCache: jest.fn(() => ({ get: jest.fn().mockResolvedValue(null) })),
 }));
 
+const mockResolveHeaders = jest.fn(
+  (options?: { headers?: Record<string, string> }) => options?.headers ?? {},
+);
 jest.mock('~/utils', () => ({
   isUserProvided: (val: string) => val === 'user_provided',
   checkUserKeyExpiry: jest.fn(),
+  resolveHeaders: (...args: unknown[]) => mockResolveHeaders(...args),
 }));
 
 const mockGetCustomEndpointConfig = jest.fn();
@@ -38,6 +42,7 @@ import { initializeCustom } from './initialize';
 function createParams(overrides: {
   apiKey?: string;
   baseURL?: string;
+  headers?: Record<string, string>;
   userBaseURL?: string;
   userApiKey?: string;
   expiresAt?: string;
@@ -47,6 +52,7 @@ function createParams(overrides: {
   mockGetCustomEndpointConfig.mockReturnValue({
     apiKey,
     baseURL,
+    headers: overrides.headers,
     models: {},
   });
 
@@ -207,5 +213,52 @@ describe('initializeCustom – SSRF guard wiring', () => {
 
     await expect(initializeCustom(params)).rejects.toThrow('targets a restricted address');
     expect(mockGetOpenAIConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe('initializeCustom – runtime header resolution', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should resolve configured custom endpoint headers with request user and body', async () => {
+    const resolvedHeaders = {
+      'X-LibreChat-User': 'user-1',
+      'X-Convo': 'conv-123',
+    };
+    mockResolveHeaders.mockReturnValueOnce(resolvedHeaders);
+
+    const params = createParams({
+      apiKey: 'sk-test-key',
+      baseURL: 'https://api.provider.com/v1',
+      headers: {
+        'X-LibreChat-User': '{{LIBRECHAT_USER_ID}}',
+        'X-Convo': '{{LIBRECHAT_BODY_CONVERSATIONID}}',
+      },
+    });
+    params.req.body = { key: '2099-01-01', conversationId: 'conv-123' };
+
+    await initializeCustom(params);
+
+    expect(mockResolveHeaders).toHaveBeenCalledWith({
+      headers: {
+        'X-LibreChat-User': '{{LIBRECHAT_USER_ID}}',
+        'X-Convo': '{{LIBRECHAT_BODY_CONVERSATIONID}}',
+      },
+      user: params.req.user,
+      body: params.req.body,
+    });
+
+    expect(mockGetOpenAIConfig).toHaveBeenCalledWith(
+      'sk-test-key',
+      expect.objectContaining({
+        headers: resolvedHeaders,
+        modelOptions: expect.objectContaining({
+          model: 'gpt-4',
+          user: 'user-1',
+        }),
+      }),
+      'test-custom',
+    );
   });
 });
