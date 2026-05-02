@@ -68,7 +68,23 @@ export async function initializeOpenAI({
 
   const isAzureOpenAI = endpoint === EModelEndpoint.azureOpenAI;
   const azureConfig = isAzureOpenAI && appConfig?.endpoints?.[EModelEndpoint.azureOpenAI];
+  const openAIConfig = (!isAzureOpenAI
+    ? (appConfig?.endpoints?.[EModelEndpoint.openAI] as
+        | (Partial<Pick<OpenAIConfigOptions, 'headers' | 'addParams' | 'dropParams'>> & {
+            streamRate?: number;
+          })
+        | undefined)
+    : undefined);
   let isServerless = false;
+
+  if (!isAzureOpenAI && openAIConfig) {
+    clientOptions.headers = {
+      ...(openAIConfig.headers ?? {}),
+      ...(clientOptions.headers ?? {}),
+    };
+    clientOptions.addParams = clientOptions.addParams ?? openAIConfig.addParams;
+    clientOptions.dropParams = clientOptions.dropParams ?? openAIConfig.dropParams;
+  }
 
   if (isAzureOpenAI && azureConfig) {
     const { modelGroupMap, groupMap } = azureConfig;
@@ -85,10 +101,7 @@ export async function initializeOpenAI({
     isServerless = serverless === true;
 
     clientOptions.reverseProxyUrl = configBaseURL ?? clientOptions.reverseProxyUrl;
-    clientOptions.headers = resolveHeaders({
-      headers: { ...headers, ...(clientOptions.headers ?? {}) },
-      user: req.user,
-    });
+    clientOptions.headers = { ...headers, ...(clientOptions.headers ?? {}) };
 
     const groupName = modelGroupMap[modelName || '']?.group;
     if (groupName && groupMap[groupName]) {
@@ -113,6 +126,14 @@ export async function initializeOpenAI({
     clientOptions.azure =
       userProvidesKey && userValues?.apiKey ? JSON.parse(userValues.apiKey) : getAzureCredentials();
     apiKey = clientOptions.azure ? clientOptions.azure.azureOpenAIApiKey : undefined;
+  }
+
+  if (clientOptions.headers) {
+    clientOptions.headers = resolveHeaders({
+      headers: clientOptions.headers,
+      user: req.user,
+      body: req.body,
+    });
   }
 
   if (userProvidesKey && !apiKey) {
@@ -145,7 +166,6 @@ export async function initializeOpenAI({
     (options as InitializeResultBase).useLegacyContent = true;
   }
 
-  const openAIConfig = appConfig?.endpoints?.[EModelEndpoint.openAI];
   const allConfig = appConfig?.endpoints?.all;
   const azureRate = modelName?.includes('gpt-4') ? 30 : 17;
 
